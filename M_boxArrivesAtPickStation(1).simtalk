@@ -1,0 +1,88 @@
+------------------------------------------------------------------------
+-- Description  : Eine Box kommt an der Pickstation an.
+--                Entfernt Box aus Warteliste, prüft welche SKUs benötigt
+--                werden und löst Auslagerung aus dem Lager aus.
+-- Parameters   :
+-- Return value :
+-- Called By    : Box entry control at PickStation conveyor
+------------------------------------------------------------------------
+/*
+Author  : Fittinghoff
+Date    : 07.05.2026
+History :
+________________________________________________________________________
+*/
+
+var mu_in_list : object
+var v_pickstation : integer
+var PickStation : object
+
+v_pickstation := @.PickStation_M
+PickStation   := .Models.Model.DL_Pickstations[v_pickstation]
+
+------------------------------------------------------------------------
+-- Step 1: Box aus der Warteliste DL_PS_L entfernen
+for var j := 1 to PickStation.DL_PS_L.Dim
+    mu_in_list := PickStation.DL_PS_L[j]
+    if mu_in_list.id = @.id
+        PickStation.DL_PS_L.delete({j})
+        exitloop
+    end
+next
+
+------------------------------------------------------------------------
+-- Step 2: Auftragsdaten der Box lesen
+var v_order_id, v_sku : integer
+var v_found : boolean
+var v_tempstring : string
+
+v_order_id := @.DT_Box_OrderPos[1,1]
+
+------------------------------------------------------------------------
+-- Step 3: Auftragszeilen aus PS_OrdersInQueue laden
+-- FIX: station-specific DT_tempOrders to avoid race condition
+--      (global DT_tempOrders caused conflicts between stations)
+PickStation.DT_tempOrders.delete
+v_tempstring := to_str(
+    "Select * from PS_OrdersInQueue_", v_pickstation,
+    " where ORDER_ID =", v_order_id, ";")
+SQLite.sql(PickStation.DT_tempOrders, v_tempstring)     -- FIX: was sqlite (lowercase)
+
+------------------------------------------------------------------------
+-- Step 4: Auftragszeilen durchlaufen und SKUs prüfen/bestellen
+for var y := 1 to PickStation.DT_tempOrders.yDim
+
+    -- FIX: only read v_sku from table, v_order_id stays from box (line above)
+    v_sku := PickStation.DT_tempOrders[2,y]
+
+    -- Prüfen ob SKU bereits unterwegs ist (DQ_PS_SKU_OnWay)
+    -- FIX: cleaner for loop with boolean flag (was fragile while countdown)
+    v_found := false
+    for var v_i := 1 to PickStation.DQ_PS_SKU_OnWay.Dim
+        if v_sku = PickStation.DQ_PS_SKU_OnWay[v_i]
+            v_found := true
+            exitloop
+        end
+    next
+
+    -- Step 5: SKU noch nicht unterwegs → aus Lager bestellen
+    if v_found = false
+        print v_sku, " added to DQ_PS_SKU_OnWay for station ", v_pickstation
+        PickStation.DQ_PS_SKU_OnWay.push(v_sku)
+        /*
+        Da in M_createStorageBox ein "waituntil" verwendet wird,
+        muss die Methode in einer separaten CallChain laufen.
+        */
+        &M_retrieveSKUfromStorage.executeNewCallChain(v_sku, v_pickstation)
+    end
+
+next
+
+------------------------------------------------------------------------
+-- Step 6: Temp-Tabelle bereinigen
+-- FIX: use station-specific table
+PickStation.DT_tempOrders.delete
+
+------------------------------------------------------------------------
+-- Step 7: Box in die Picking-Warteschlange einreihen
+PickStation.DQ_PS_KomBox.push(@)

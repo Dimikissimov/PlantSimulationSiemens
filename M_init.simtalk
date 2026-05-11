@@ -1,0 +1,115 @@
+------------------------------------------------------------------------
+-- Description  : Initialisierung des Modells
+-- Parameters   :
+-- Return value :
+-- Called By    : automatic start of simulation
+------------------------------------------------------------------------
+/*
+Author  : Fittinghoff
+Date    : 03.04.2026
+History :
+________________________________________________________________________
+*/
+
+TBL_WMS.delete
+
+------------------------------------------------------------------------
+SQLite.Open(false)
+SQLite.sql("drop table if exists WMS;")
+SQLite.sql("create table WMS (SKU_ID integer, GASSE integer);")
+
+var v_tempstring, v_string2 : string
+var v_i : integer
+var v_real : real
+
+-- Für jede Gasse werden alle SKU zzgl. einer Zufallszahl erzeugt
+-- dann aus der nach Zufallszahl sortierten Liste die ersten "BoxAisle" Werte übertragen
+-- Realisierung "ziehen ohne zurücklegen"
+for var v_gasse := 1 to 4
+    SQLite.sql("drop table if exists SKUlist;")
+    SQLite.sql("create table SKUlist (SKU_ID integer, SKU_real real, GASSE integer);")
+    for var i := 1 to NoSKU
+        v_real := z_uniform(1, 1.0, NoSKU)
+        v_tempstring := to_str("insert into SKUlist values (", i, ",", v_real, ",", v_gasse, ");")
+        SQLite.exec(v_tempstring)   -- FIX: was SQlite
+    next
+    -- FIX: LIMIT uncommented to respect BoxAisle capacity
+    v_tempstring := to_str("INSERT INTO WMS SELECT SKU_ID, GASSE FROM SKUlist ORDER BY SKU_real DESC LIMIT ", BoxAisle, ";")
+    SQLite.exec(v_tempstring)       -- FIX: was SQlite
+next
+
+v_tempstring := to_str("SELECT SKU_ID, GASSE, COUNT(GASSE) FROM WMS GROUP BY SKU_ID, GASSE ORDER BY SKU_ID DESC;")
+SQLite.sql(TBL_WMS, v_tempstring)
+
+-- Initialisierung der Pickstationen
+-- FIX: Worker init removed — Broker handles assignment automatically
+for var v_pickstation := 1 to DL_Pickstations.Dim
+    DL_Pickstations[v_pickstation].Idx := v_pickstation
+next
+
+------------------------------------------------------------------------
+-- 1 Sekunde warten bis Source initialisiert ist
+wait 1
+------------------------------------------------------------------------
+
+SQLite.sql("drop table if exists ORDERS;")
+SQLite.sql("create table ORDERS (ORDER_ID integer, SKU_ID integer, NoPICKS integer, GEN_TIME time);")
+
+for var v_pickstation := 1 to DL_Pickstations.Dim
+
+    -- PS_curOrders_1..4
+    v_tempstring := to_str("drop table if exists PS_curOrders_", v_pickstation, ";")
+    SQLite.sql(v_tempstring)
+    v_tempstring := to_str("create table PS_curOrders_", v_pickstation, " (ORDER_ID integer, SKU_ID integer, NoPICKS integer, GEN_TIME time);")
+    SQLite.sql(v_tempstring)
+
+    -- PS_OrdersInQueue_1..4
+    v_tempstring := to_str("drop table if exists PS_OrdersInQueue_", v_pickstation, ";")
+    SQLite.exec(v_tempstring)       -- FIX: was SQlite
+    v_tempstring := to_str("create table PS_OrdersInQueue_", v_pickstation, " (ORDER_ID integer, SKU_ID integer, NoPICKS integer, GEN_TIME time);") -- FIX: added semicolon
+    SQLite.exec(v_tempstring)       -- FIX: was SQlite
+
+    -- PS_OrdersActive_1..4
+    v_tempstring := to_str("drop table if exists PS_OrdersActive_", v_pickstation, ";")
+    SQLite.exec(v_tempstring)       -- FIX: was SQlite
+    v_tempstring := to_str("create table PS_OrdersActive_", v_pickstation, " (ORDER_ID integer, SKU_ID integer, NoPICKS integer, GEN_TIME time);")
+    SQLite.exec(v_tempstring)       -- FIX: was SQlite
+
+next
+
+&M_generateOrders.executeNewCallChain -- Aufträge für jede Pickstation erzeugen
+
+------------------------------------------------------------------------
+-- Reihenfolge der zu durchsuchenden Gassen bzgl. SKU
+-- Gasse 1 -> Pickstation 1
+-- Gasse 2 -> Pickstation 2
+-- Gasse 3 -> Pickstation 3
+-- Gasse 4 -> Pickstation 4
+------------------------------------------------------------------------
+
+-- Pickstation 1: Suchreihenfolge 1,2,3,4
+DT_PS_SuchIndex[1,1] := 1
+DT_PS_SuchIndex[2,1] := 2
+DT_PS_SuchIndex[3,1] := 3
+DT_PS_SuchIndex[4,1] := 4
+
+-- Pickstation 2: Suchreihenfolge 2,1,3,4
+DT_PS_SuchIndex[1,2] := 2
+DT_PS_SuchIndex[2,2] := 1
+DT_PS_SuchIndex[3,2] := 3
+DT_PS_SuchIndex[4,2] := 4
+
+-- Pickstation 3: Suchreihenfolge 3,2,4,1
+DT_PS_SuchIndex[1,3] := 3
+DT_PS_SuchIndex[2,3] := 2
+DT_PS_SuchIndex[3,3] := 4
+DT_PS_SuchIndex[4,3] := 1
+
+-- Pickstation 4: Suchreihenfolge 4,3,2,1
+DT_PS_SuchIndex[1,4] := 4
+DT_PS_SuchIndex[2,4] := 3
+DT_PS_SuchIndex[3,4] := 2
+DT_PS_SuchIndex[4,4] := 1
+
+print "End of init"
+print

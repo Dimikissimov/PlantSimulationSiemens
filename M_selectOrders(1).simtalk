@@ -1,0 +1,109 @@
+------------------------------------------------------------------------
+-- Description  : Eine leere Box kommt an der Pickstation an.
+--                Selektion von Aufträgen aus dem Orderpool ORDERS.
+--                Die Box erhält eine Auftragsnummer aus dem Pool.
+-- Parameters   :
+-- Return value :
+-- Called By    : Immer wenn ein leerer Behälter an der Pickstation
+--                einen Auftrag benötigt
+------------------------------------------------------------------------
+/*
+Author  : Fittinghoff
+Date    : 10.04.2026
+History :
+________________________________________________________________________
+*/
+
+var v_order_id, v_pickstation : integer
+var v_count : integer
+var v_tempstring : string
+var PickStation : object
+
+-- Pickstation aus Attribut der Box bestimmen
+v_pickstation := @.PickStation_L
+PickStation   := DL_Pickstations[v_pickstation]
+
+if v_pickstation > 1
+    print v_pickstation
+end
+
+------------------------------------------------------------------------
+-- FIX: Guard — prüfe ob überhaupt Aufträge vorhanden sind
+v_tempstring := to_str("Select COUNT(*) from ORDERS;")
+SQLite.prepare(v_tempstring)
+if SQLite.step
+    v_count := str_to_num(SQLite.getColumnString(0))
+end
+SQLite.finalize
+if v_count = 0
+    print "Orderpool is empty - no orders available!"
+    exit
+end
+------------------------------------------------------------------------
+
+-- DQ_PS_selectedOrders auf 7 Einträge auffüllen (Vorausschau)
+while PickStation.DQ_PS_selectedOrders.dim <= 7
+
+    v_tempstring := to_str("Select * from ORDERS order by ORDER_ID ASC;")
+    SQLite.prepare(v_tempstring)    -- translate sql-statement
+
+    if SQLite.step
+        v_order_id := str_to_num(SQLite.getColumnString(0))    -- Auftragsnummer
+    else
+        print "Keine Aufträge auf dem Orderpool?"
+        SQLite.finalize             -- FIX: finalize before exit
+        exit                        -- FIX: clean exit instead of debug
+    end
+
+    SQLite.finalize                 -- FIX: was inside loop at wrong position
+
+    -- Alle Positionen in PS_curOrders übertragen
+    v_tempstring := to_str(
+        "INSERT INTO PS_curOrders_", v_pickstation,
+        " Select * from ORDERS where ORDER_ID =", v_order_id, ";")
+    SQLite.exec(v_tempstring)
+
+    -- Order_ID in DQ_PS_selectedOrders speichern
+    PickStation.DQ_PS_selectedOrders.push(v_order_id)
+
+    -- Auftrag aus globalem Orderpool ORDERS löschen
+    v_tempstring := to_str(
+        "Delete from ORDERS where ORDER_ID =", v_order_id, ";")
+    SQLite.exec(v_tempstring)
+
+    -- TBL_ORDERPOOL zur Überprüfung aktualisieren
+    TBL_ORDERPOOL.delete
+    v_tempstring := to_str("Select * from ORDERS order by ORDER_ID ASC;")
+    SQLite.sql(TBL_ORDERPOOL, v_tempstring)
+
+end
+
+------------------------------------------------------------------------
+-- Ältesten Eintrag aus DQ_PS_selectedOrders dem Behälter zuweisen (FIFO)
+v_order_id := PickStation.DQ_PS_selectedOrders[1]
+PickStation.DQ_PS_selectedOrders.pop
+
+-- Auftragszeilen in PS_OrdersInQueue übertragen
+v_tempstring := to_str(
+    "Insert into PS_OrdersInQueue_", v_pickstation,
+    " Select * from PS_curOrders_", v_pickstation,
+    " where ORDER_ID =", v_order_id, ";")
+SQLite.exec(v_tempstring)
+
+-- Inhalte auf Tabelle der Box übertragen (DT_Box_OrderPos)
+v_tempstring := to_str(
+    "Select *, false as PickDone from PS_OrdersInQueue_", v_pickstation,
+    " where ORDER_ID =", v_order_id, ";")
+SQLite.sql(@.DT_Box_OrderPos, v_tempstring)
+
+-- PS_curOrders bereinigen
+v_tempstring := to_str(
+    "Delete from PS_curOrders_", v_pickstation,
+    " where ORDER_ID =", v_order_id, ";")
+SQLite.exec(v_tempstring)
+
+-- FIX: PS_OrdersInQueue bereinigen (was never cleaned before)
+v_tempstring := to_str(
+    "Delete from PS_OrdersInQueue_", v_pickstation,
+    " where ORDER_ID =", v_order_id, ";")
+SQLite.exec(v_tempstring)

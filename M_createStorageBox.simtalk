@@ -1,0 +1,89 @@
+------------------------------------------------------------------------
+-- Description  : Erzeugung von Lagerboxen der SKU in einer Lagergasse
+-- Parameters   : v_sku integer, v_pickstation integer
+-- Return value :
+-- Called By    : M_retrieveSKUfromStorage
+------------------------------------------------------------------------
+/*
+Author  : M. Fittinghoff
+Date    : 07.05.2026
+History :
+________________________________________________________________________
+*/
+
+param v_sku : integer, v_pickstation : integer
+
+var mu : object
+var v_tempstring : string
+var v_gasse : integer
+var v_found : boolean
+var v_searchIdx : integer
+var PickStation : object
+var TargetStation : object
+
+PickStation := .Models.Model.DL_Pickstations[v_pickstation]
+v_found     := false
+
+------------------------------------------------------------------------
+-- Step 1: Zuerst in der eigenen Gasse suchen (ideal: Gasse = Pickstation)
+v_tempstring := to_str(
+    "Select SKU_ID from WMS where SKU_ID =", v_sku,
+    " and GASSE =", v_pickstation, ";")
+SQLite.prepare(v_tempstring)
+
+if SQLite.step
+    -- In der eigenen Gasse gefunden
+    SQLite.finalize     -- FIX: was commented out
+    v_gasse := v_pickstation
+    v_found := true
+else
+    SQLite.finalize     -- FIX: was commented out, missing in else branch
+
+    -- FIX: Andere Gassen per DT_PS_SuchIndex durchsuchen (was only debug before)
+    print "SKU ", v_sku, " nicht in Gasse ", v_pickstation, " — suche andere Gassen..."
+
+    v_searchIdx := 2    -- Start bei zweiter Priorität
+    while v_searchIdx <= 4 and v_found = false
+        v_gasse := DT_PS_SuchIndex[v_searchIdx, v_pickstation]
+
+        v_tempstring := to_str(
+            "Select SKU_ID from WMS where SKU_ID =", v_sku,
+            " and GASSE =", v_gasse, ";")
+        SQLite.prepare(v_tempstring)
+
+        if SQLite.step
+            SQLite.finalize
+            v_found := true
+            print "SKU ", v_sku, " gefunden in Gasse ", v_gasse,
+                  " (Ausweichgasse für Pickstation ", v_pickstation, ")"
+        else
+            SQLite.finalize
+        end
+
+        v_searchIdx += 1
+    end
+end
+
+------------------------------------------------------------------------
+-- Step 2: Prüfen ob SKU irgendwo gefunden wurde
+if v_found = false
+    print "FEHLER: SKU ", v_sku, " nicht im WMS gefunden!"
+    debug
+    exit
+end
+
+------------------------------------------------------------------------
+-- Step 3: Zielstation für gefundene Gasse bestimmen
+TargetStation := .Models.Model.DL_Pickstations[v_gasse]
+
+-- FIX: waituntil für korrekte Zielstation (not just home station)
+waituntil TargetStation.BufferGasse.full = false
+
+------------------------------------------------------------------------
+-- Step 4: Box erzeugen und zur BufferGasse bewegen
+mu                    := TargetStation.SourceGasse.cont
+mu.SKU                := v_sku
+mu.conveyingdirection := 1              -- Förderrichtung 1 = quer
+mu.PickStation_M      := v_pickstation  -- ursprünglich anfordernde Station
+mu._3D.activateMaterialWithColor(makeRGBValue(1, 1, 1))
+mu.move(TargetStation.BufferGasse)

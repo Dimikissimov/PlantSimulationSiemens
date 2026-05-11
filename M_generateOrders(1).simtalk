@@ -1,0 +1,81 @@
+------------------------------------------------------------------------
+-- Description  : Füllung einer Tabelle mit Aufträgen
+-- Parameters   :
+-- Return value :
+-- Called By    : M_init, then loops every 3600s
+-- SQLite.sql("drop table if exists ORDERS;")
+-- SQLite.sql("create table ORDERS (ORDER_ID integer, SKU_ID integer, NoPICKS integer, GEN_TIME datetime)")
+------------------------------------------------------------------------
+/*
+Author  : Fittinghoff
+Date    : 30.03.2026
+History :
+________________________________________________________________________
+*/
+
+var v_i, v_pos, v_order_id, v_sku, v_picks : integer
+var v_tempstring : string
+var v_simtime : time
+
+-- Endlos Aufträge in einem bestimmten Takt generieren
+while 1 = 1
+
+    -- Zähle aktuelle Aufträge im Pool
+    SQLite.sql("drop table if exists tmpOrders;")
+    SQLite.sql("create table tmpOrders (ORDER_ID integer);")
+
+    v_tempstring := to_str("INSERT INTO tmpOrders SELECT ORDER_ID FROM ORDERS GROUP BY ORDER_ID ORDER BY ORDER_ID ASC;")
+    SQLite.exec(v_tempstring)       -- FIX: was SQlite
+
+    v_tempstring := to_str("SELECT Count(ORDER_ID) FROM tmpOrders;")
+    SQLite.sql(TBL_tmpOrders, v_tempstring)     -- FIX: was tbl_tmpOrders
+    v_i := TBL_tmpOrders[1,1]                  -- FIX: was tbl_tmpOrders
+
+    -- Aufträge generieren bis SizeOrderPool erreicht
+    while v_i < SizeOrderPool
+
+        v_order_id += 1
+        -- FIX: floor() for proper integer, simplified expression
+        v_pos := floor(1 + MaxPos_Order * z_uniform(1, 0.0, 1.0))
+
+        repeat
+            -- FIX: floor() for proper integer
+            v_sku := floor(1 + NoSKU * z_uniform(1, 0.0, 1.0))
+
+            -- Sicherstellen dass keine SKU doppelt in einem Auftrag vorkommt
+            v_tempstring := to_str(
+                "Select * from ORDERS where ORDER_ID = ", v_order_id,
+                " and SKU_ID = ", v_sku, ";")
+            SQLite.prepare(v_tempstring)
+
+            if SQLite.step
+                -- SKU bereits vorhanden, neue würfeln
+                SQLite.finalize     -- FIX: was SQlite, correct casing
+            else
+                SQLite.finalize     -- FIX: was missing in else branch!
+
+                -- FIX: floor() for proper integer
+                v_picks   := floor(1 + 8 * z_uniform(1, 0.0, 1.0))
+                v_simtime := EventController.SimTime
+
+                v_tempstring := to_str(
+                    "insert into ORDERS values (",
+                    v_order_id, ",",
+                    v_sku, ",",
+                    v_picks, ",'",
+                    v_simtime, "');")
+                SQLite.exec(v_tempstring)   -- FIX: was SQlite.sql (wrong method!)
+                v_pos -= 1
+            end
+
+        until v_pos = 0
+        v_i += 1
+    end
+
+    -- TBL_ORDERPOOL zur Überprüfung aktualisieren
+    TBL_ORDERPOOL.delete
+    v_tempstring := to_str("SELECT * FROM ORDERS ORDER BY ORDER_ID ASC;")
+    SQLite.sql(TBL_ORDERPOOL, v_tempstring)
+
+    wait 3600   -- jede Stunde Auftragsbestand ergänzen
+end
